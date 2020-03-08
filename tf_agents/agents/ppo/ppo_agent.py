@@ -135,6 +135,7 @@ class PPOAgent(tf_agent.TFAgent):
                debug_summaries=False,
                summarize_grads_and_vars=False,
                train_step_counter=None,
+               observation_and_action_constraint_splitter=None,
                name=None):
     """Creates a PPO Agent.
 
@@ -265,6 +266,7 @@ class PPOAgent(tf_agent.TFAgent):
     self._adaptive_kl_tolerance = adaptive_kl_tolerance
     self._gradient_clipping = gradient_clipping or 0.0
     self._check_numerics = check_numerics
+    self._observation_and_action_constraint_splitter = observation_and_action_constraint_splitter
 
     if initial_adaptive_kl_beta > 0.0:
       # TODO(kbanoop): Rename create_variable.
@@ -291,6 +293,7 @@ class PPOAgent(tf_agent.TFAgent):
             actor_network=actor_net,
             value_network=value_net,
             observation_normalizer=self._observation_normalizer,
+            observation_and_action_constraint_splitter=self._observation_and_action_constraint_splitter,
             clip=False,
             collect=False))
 
@@ -300,6 +303,7 @@ class PPOAgent(tf_agent.TFAgent):
         actor_network=actor_net,
         value_network=value_net,
         observation_normalizer=self._observation_normalizer,
+        observation_and_action_constraint_splitter=self._observation_and_action_constraint_splitter,
         clip=False,
         collect=True)
 

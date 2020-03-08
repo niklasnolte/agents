@@ -53,6 +53,7 @@ class PPOPolicy(actor_policy.ActorPolicy):
                actor_network=None,
                value_network=None,
                observation_normalizer=None,
+               observation_and_action_constraint_splitter=None,
                clip=True,
                collect=True):
     """Builds a PPO Policy given network Templates or functions.
@@ -101,6 +102,7 @@ class PPOPolicy(actor_policy.ActorPolicy):
         info_spec=info_spec,
         actor_network=actor_network,
         observation_normalizer=observation_normalizer,
+        observation_and_action_constraint_splitter=observation_and_action_constraint_splitter,
         clip=clip)
 
     self._collect = collect
@@ -145,6 +147,10 @@ class PPOPolicy(actor_policy.ActorPolicy):
     """
     if self._observation_normalizer:
       observations = self._observation_normalizer.normalize(observations)
+    if self._observation_and_action_constraint_splitter:
+      observations, _ = self._observation_and_action_constraint_splitter(observations)
+      return self._value_network(observations, step_types, value_state,
+                                training=training) #FIXME mask?
     return self._value_network(observations, step_types, value_state,
                                training=training)
 
@@ -152,6 +158,11 @@ class PPOPolicy(actor_policy.ActorPolicy):
     observation = time_step.observation
     if self._observation_normalizer:
       observation = self._observation_normalizer.normalize(observation)
+    if self._observation_and_action_constraint_splitter:
+      observation, mask = self._observation_and_action_constraint_splitter(observation)
+      return self._actor_network(
+          observation, time_step.step_type, network_state=policy_state,
+          training=training, mask=mask)
     return self._actor_network(
         observation, time_step.step_type, network_state=policy_state,
         training=training)
