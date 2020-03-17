@@ -25,6 +25,7 @@ import tensorflow_probability as tfp
 
 from tf_agents.agents.ppo import ppo_policy
 from tf_agents.networks import network
+from tf_agents.networks import actor_distribution_network
 from tf_agents.specs import distribution_spec
 from tf_agents.specs import tensor_spec
 from tf_agents.trajectories import time_step as ts
@@ -32,299 +33,355 @@ from tf_agents.utils import test_utils
 
 
 class DummyActorNet(network.Network):
-
-  def __init__(self, action_spec, name=None):
-    super(DummyActorNet, self).__init__(
-        tensor_spec.TensorSpec([2], tf.float32), (), 'DummyActorNet')
-    self._action_spec = action_spec
-    self._flat_action_spec = tf.nest.flatten(self._action_spec)[0]
-
-    self._dummy_layers = [
-        tf.keras.layers.Dense(
-            self._flat_action_spec.shape.num_elements(),
-            kernel_initializer=tf.compat.v1.initializers.constant([2, 1]),
-            bias_initializer=tf.compat.v1.initializers.constant([5]),
-            activation=tf.keras.activations.tanh,
+    def __init__(self, action_spec, name=None):
+        super(DummyActorNet, self).__init__(
+            tensor_spec.TensorSpec([2], tf.float32), (), "DummyActorNet"
         )
-    ]
+        self._action_spec = action_spec
+        self._flat_action_spec = tf.nest.flatten(self._action_spec)[0]
 
-  def call(self, inputs, step_type=None, network_state=()):
-    del step_type
-    hidden_state = tf.cast(tf.nest.flatten(inputs), tf.float32)[0]
-    for layer in self._dummy_layers:
-      hidden_state = layer(hidden_state)
+        self._dummy_layers = [
+            tf.keras.layers.Dense(
+                self._flat_action_spec.shape.num_elements(),
+                kernel_initializer=tf.compat.v1.initializers.constant([2, 1]),
+                bias_initializer=tf.compat.v1.initializers.constant([5]),
+                activation=tf.keras.activations.tanh,
+            )
+        ]
 
-    means = tf.reshape(hidden_state,
-                       [-1] + self._flat_action_spec.shape.as_list())
-    spec_means = (
-        self._flat_action_spec.maximum + self._flat_action_spec.minimum) / 2.0
-    spec_ranges = (
-        self._flat_action_spec.maximum - self._flat_action_spec.minimum) / 2.0
-    action_means = spec_means + spec_ranges * means
+    def call(self, inputs, step_type=None, network_state=()):
+        del step_type
+        hidden_state = tf.cast(tf.nest.flatten(inputs), tf.float32)[0]
+        for layer in self._dummy_layers:
+            hidden_state = layer(hidden_state)
 
-    return tf.nest.pack_sequence_as(self._action_spec,
-                                    [action_means]), network_state
+        means = tf.reshape(hidden_state, [-1] + self._flat_action_spec.shape.as_list())
+        spec_means = (
+            self._flat_action_spec.maximum + self._flat_action_spec.minimum
+        ) / 2.0
+        spec_ranges = (
+            self._flat_action_spec.maximum - self._flat_action_spec.minimum
+        ) / 2.0
+        action_means = spec_means + spec_ranges * means
+
+        return (
+            tf.nest.pack_sequence_as(self._action_spec, [action_means]),
+            network_state,
+        )
 
 
 class DummyActorDistributionNet(network.DistributionNetwork):
+    def __init__(self, action_spec, name=None):
+        output_spec = tf.nest.map_structure(
+            self._get_normal_distribution_spec, action_spec
+        )
+        super(DummyActorDistributionNet, self).__init__(
+            tensor_spec.TensorSpec([2], tf.float32),
+            (),
+            output_spec=output_spec,
+            name="DummyActorDistributionNet",
+        )
+        self._action_net = DummyActorNet(action_spec)
 
-  def __init__(self, action_spec, name=None):
-    output_spec = tf.nest.map_structure(self._get_normal_distribution_spec,
-                                        action_spec)
-    super(DummyActorDistributionNet, self).__init__(
-        tensor_spec.TensorSpec([2], tf.float32),
-        (),
-        output_spec=output_spec,
-        name='DummyActorDistributionNet')
-    self._action_net = DummyActorNet(action_spec)
+    def _get_normal_distribution_spec(self, sample_spec):
+        input_param_shapes = tfp.distributions.Normal.param_static_shapes(
+            sample_spec.shape
+        )
+        input_param_spec = tf.nest.map_structure(
+            lambda tensor_shape: tensor_spec.TensorSpec(  # pylint: disable=g-long-lambda
+                shape=tensor_shape, dtype=sample_spec.dtype
+            ),
+            input_param_shapes,
+        )
 
-  def _get_normal_distribution_spec(self, sample_spec):
-    input_param_shapes = tfp.distributions.Normal.param_static_shapes(
-        sample_spec.shape)
-    input_param_spec = tf.nest.map_structure(
-        lambda tensor_shape: tensor_spec.TensorSpec(  # pylint: disable=g-long-lambda
-            shape=tensor_shape,
-            dtype=sample_spec.dtype),
-        input_param_shapes)
+        return distribution_spec.DistributionSpec(
+            tfp.distributions.Normal, input_param_spec, sample_spec=sample_spec
+        )
 
-    return distribution_spec.DistributionSpec(
-        tfp.distributions.Normal, input_param_spec, sample_spec=sample_spec)
+    def call(self, inputs, step_type=None, network_state=()):
+        del step_type
+        action_means, network_state = self._action_net(inputs, network_state)
 
-  def call(self, inputs, step_type=None, network_state=()):
-    del step_type
-    action_means, network_state = self._action_net(inputs, network_state)
+        def _action_distribution(action_mean):
+            action_std = tf.ones_like(action_mean)
+            return tfp.distributions.Normal(action_mean, action_std)
 
-    def _action_distribution(action_mean):
-      action_std = tf.ones_like(action_mean)
-      return tfp.distributions.Normal(action_mean, action_std)
-
-    return tf.nest.map_structure(_action_distribution,
-                                 action_means), network_state
+        return tf.nest.map_structure(_action_distribution, action_means), network_state
 
 
 class DummyValueNet(network.Network):
+    def __init__(self, name=None):
+        super(DummyValueNet, self).__init__(
+            tensor_spec.TensorSpec([2], tf.float32), (), "DummyValueNet"
+        )
+        self._dummy_layers = [
+            tf.keras.layers.Dense(
+                1,
+                kernel_initializer=tf.compat.v1.initializers.constant([2, 1]),
+                bias_initializer=tf.compat.v1.initializers.constant([5]),
+            )
+        ]
 
-  def __init__(self, name=None):
-    super(DummyValueNet, self).__init__(
-        tensor_spec.TensorSpec([2], tf.float32), (), 'DummyValueNet')
-    self._dummy_layers = [
-        tf.keras.layers.Dense(
-            1,
-            kernel_initializer=tf.compat.v1.initializers.constant([2, 1]),
-            bias_initializer=tf.compat.v1.initializers.constant([5]))
+    def call(self, inputs, step_type=None, network_state=()):
+        del step_type
+        hidden_state = tf.cast(tf.nest.flatten(inputs), tf.float32)[0]
+        for layer in self._dummy_layers:
+            hidden_state = layer(hidden_state)
+        return hidden_state, network_state
+
+
+def _test_cases(prefix=""):
+    return [
+        {"testcase_name": "%s0" % prefix, "network_cls": DummyActorNet,},
+        {"testcase_name": "%s1" % prefix, "network_cls": DummyActorDistributionNet,},
     ]
-
-  def call(self, inputs, step_type=None, network_state=()):
-    del step_type
-    hidden_state = tf.cast(tf.nest.flatten(inputs), tf.float32)[0]
-    for layer in self._dummy_layers:
-      hidden_state = layer(hidden_state)
-    return hidden_state, network_state
-
-
-def _test_cases(prefix=''):
-  return [{
-      'testcase_name': '%s0' % prefix,
-      'network_cls': DummyActorNet,
-  }, {
-      'testcase_name': '%s1' % prefix,
-      'network_cls': DummyActorDistributionNet,
-  }]
 
 
 class PPOPolicyTest(parameterized.TestCase, test_utils.TestCase):
+    def setUp(self):
+        super(PPOPolicyTest, self).setUp()
+        self._obs_spec = tensor_spec.TensorSpec([2], tf.float32)
+        self._time_step_spec = ts.time_step_spec(self._obs_spec)
+        self._action_spec = tensor_spec.BoundedTensorSpec([1], tf.float32, 2, 3)
 
-  def setUp(self):
-    super(PPOPolicyTest, self).setUp()
-    self._obs_spec = tensor_spec.TensorSpec([2], tf.float32)
-    self._time_step_spec = ts.time_step_spec(self._obs_spec)
-    self._action_spec = tensor_spec.BoundedTensorSpec([1], tf.float32, 2, 3)
+    @property
+    def _time_step(self):
+        return ts.TimeStep(
+            step_type=tf.constant([1], dtype=tf.int32),
+            reward=tf.constant([1], dtype=tf.float32),
+            discount=tf.constant([1], dtype=tf.float32),
+            observation=tf.constant([[1, 2]], dtype=tf.float32),
+        )
 
-  @property
-  def _time_step(self):
-    return ts.TimeStep(
-        step_type=tf.constant([1], dtype=tf.int32),
-        reward=tf.constant([1], dtype=tf.float32),
-        discount=tf.constant([1], dtype=tf.float32),
-        observation=tf.constant([[1, 2]], dtype=tf.float32))
+    @property
+    def _time_step_batch(self):
+        return ts.TimeStep(
+            tf.constant(ts.StepType.FIRST, dtype=tf.int32, shape=[2], name="step_type"),
+            tf.constant(0.0, dtype=tf.float32, shape=[2], name="reward"),
+            tf.constant(1.0, dtype=tf.float32, shape=[2], name="discount"),
+            tf.constant([[1, 2], [3, 4]], dtype=tf.float32, name="observation"),
+        )
 
-  @property
-  def _time_step_batch(self):
-    return ts.TimeStep(
-        tf.constant(
-            ts.StepType.FIRST, dtype=tf.int32, shape=[2], name='step_type'),
-        tf.constant(0.0, dtype=tf.float32, shape=[2], name='reward'),
-        tf.constant(1.0, dtype=tf.float32, shape=[2], name='discount'),
-        tf.constant([[1, 2], [3, 4]], dtype=tf.float32, name='observation'))
+    @parameterized.named_parameters(*_test_cases("test_build"))
+    def testBuild(self, network_cls):
+        actor_network = network_cls(self._action_spec)
+        value_network = DummyValueNet()
 
-  @parameterized.named_parameters(*_test_cases('test_build'))
-  def testBuild(self, network_cls):
-    actor_network = network_cls(self._action_spec)
-    value_network = DummyValueNet()
+        policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            self._action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
 
-    policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        self._action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
+        self.assertEqual(policy.time_step_spec, self._time_step_spec)
+        self.assertEqual(policy.action_spec, self._action_spec)
 
-    self.assertEqual(policy.time_step_spec, self._time_step_spec)
-    self.assertEqual(policy.action_spec, self._action_spec)
+    @parameterized.named_parameters(*_test_cases("test_reset"))
+    def testReset(self, network_cls):
+        actor_network = network_cls(self._action_spec)
+        value_network = DummyValueNet()
 
-  @parameterized.named_parameters(*_test_cases('test_reset'))
-  def testReset(self, network_cls):
-    actor_network = network_cls(self._action_spec)
-    value_network = DummyValueNet()
+        policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            self._action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
 
-    policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        self._action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
+        policy_state = policy.get_initial_state(batch_size=1)
 
-    policy_state = policy.get_initial_state(batch_size=1)
+        # Dummy network has no policy_state so expect empty tuple from reset.
+        self.assertEqual((), policy_state)
 
-    # Dummy network has no policy_state so expect empty tuple from reset.
-    self.assertEqual((), policy_state)
+    @parameterized.named_parameters(*_test_cases("test_action"))
+    def testAction(self, network_cls):
+        actor_network = network_cls(self._action_spec)
+        value_network = DummyValueNet()
 
-  @parameterized.named_parameters(*_test_cases('test_action'))
-  def testAction(self, network_cls):
-    actor_network = network_cls(self._action_spec)
-    value_network = DummyValueNet()
+        policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            self._action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
 
-    policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        self._action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
+        action_step = policy.action(self._time_step)
+        self.assertEqual(action_step.action.shape.as_list(), [1, 1])
+        self.assertEqual(action_step.action.dtype, tf.float32)
+        self.evaluate(tf.compat.v1.global_variables_initializer())
+        actions_ = self.evaluate(action_step.action)
+        self.assertTrue(np.all(actions_ >= self._action_spec.minimum))
+        self.assertTrue(np.all(actions_ <= self._action_spec.maximum))
 
-    action_step = policy.action(self._time_step)
-    self.assertEqual(action_step.action.shape.as_list(), [1, 1])
-    self.assertEqual(action_step.action.dtype, tf.float32)
-    self.evaluate(tf.compat.v1.global_variables_initializer())
-    actions_ = self.evaluate(action_step.action)
-    self.assertTrue(np.all(actions_ >= self._action_spec.minimum))
-    self.assertTrue(np.all(actions_ <= self._action_spec.maximum))
+    @parameterized.named_parameters(*_test_cases("test_action_list"))
+    def testActionList(self, network_cls):
+        action_spec = [self._action_spec]
+        actor_network = network_cls(action_spec)
+        value_network = DummyValueNet()
 
-  @parameterized.named_parameters(*_test_cases('test_action_list'))
-  def testActionList(self, network_cls):
-    action_spec = [self._action_spec]
-    actor_network = network_cls(action_spec)
-    value_network = DummyValueNet()
+        policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
 
-    policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
+        action_step = policy.action(self._time_step)
+        self.assertIsInstance(action_step.action, list)
+        self.evaluate(tf.compat.v1.global_variables_initializer())
+        actions_ = self.evaluate(action_step.action)
+        self.assertTrue(np.all(actions_ >= action_spec[0].minimum))
+        self.assertTrue(np.all(actions_ <= action_spec[0].maximum))
 
-    action_step = policy.action(self._time_step)
-    self.assertIsInstance(action_step.action, list)
-    self.evaluate(tf.compat.v1.global_variables_initializer())
-    actions_ = self.evaluate(action_step.action)
-    self.assertTrue(np.all(actions_ >= action_spec[0].minimum))
-    self.assertTrue(np.all(actions_ <= action_spec[0].maximum))
+    @parameterized.named_parameters(*_test_cases("test_action_batch"))
+    def testActionBatch(self, network_cls):
+        actor_network = network_cls(self._action_spec)
+        value_network = DummyValueNet()
 
-  @parameterized.named_parameters(*_test_cases('test_action_batch'))
-  def testActionBatch(self, network_cls):
-    actor_network = network_cls(self._action_spec)
-    value_network = DummyValueNet()
+        policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            self._action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
 
-    policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        self._action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
+        action_step = policy.action(self._time_step_batch)
+        self.assertEqual(action_step.action.shape.as_list(), [2, 1])
+        self.assertEqual(action_step.action.dtype, tf.float32)
+        self.evaluate(tf.compat.v1.global_variables_initializer())
+        actions_ = self.evaluate(action_step.action)
+        self.assertTrue(np.all(actions_ >= self._action_spec.minimum))
+        self.assertTrue(np.all(actions_ <= self._action_spec.maximum))
 
-    action_step = policy.action(self._time_step_batch)
-    self.assertEqual(action_step.action.shape.as_list(), [2, 1])
-    self.assertEqual(action_step.action.dtype, tf.float32)
-    self.evaluate(tf.compat.v1.global_variables_initializer())
-    actions_ = self.evaluate(action_step.action)
-    self.assertTrue(np.all(actions_ >= self._action_spec.minimum))
-    self.assertTrue(np.all(actions_ <= self._action_spec.maximum))
+    def testMasking(self):
+        batch_size = 1000
+        num_state_dims = 5
+        num_actions = 8
+        observations = tf.random.uniform([batch_size, num_state_dims])
+        time_step = ts.restart(observations, batch_size=batch_size)
+        input_tensor_spec = tensor_spec.TensorSpec([num_state_dims], tf.float32)
+        action_spec = tensor_spec.BoundedTensorSpec([1], tf.int32, 0, num_actions - 1)
 
-  @parameterized.named_parameters(*_test_cases('test_action'))
-  def testValue(self, network_cls):
-    actor_network = network_cls(self._action_spec)
-    value_network = DummyValueNet()
+        # We create a fixed mask here for testing purposes. Normally the mask would
+        # be part of the observation.
+        mask = [0, 1, 0, 1, 0, 0, 1, 0]
+        np_mask = np.array(mask)
+        tf_mask = tf.constant([mask for _ in range(batch_size)])
+        actor_network = actor_distribution_network.ActorDistributionNetwork(
+            input_tensor_spec, action_spec
+        )
+        value_network = DummyValueNet()
 
-    policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        self._action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
+        policy = ppo_policy.PPOPolicy(
+            ts.time_step_spec(input_tensor_spec),
+            action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+            observation_and_action_constraint_splitter=(
+                lambda observation: (observation, tf_mask)
+            ),
+        )
 
-    batch_size = tf.compat.dimension_value(self._time_step.step_type.shape[0])
-    policy_state = policy.get_initial_state(batch_size=batch_size)
-    value_pred, unused_policy_state = policy.apply_value_network(
-        self._time_step.observation, self._time_step.step_type, policy_state)
-    self.assertEqual(value_pred.shape.as_list(), [1, 1])
-    self.assertEqual(value_pred.dtype, tf.float32)
-    self.evaluate(tf.compat.v1.global_variables_initializer())
-    self.evaluate(value_pred)
+        # Force creation of variables before global_variables_initializer.
+        policy.variables()
+        self.evaluate(tf.compat.v1.global_variables_initializer())
 
-  def testUpdate(self):
-    tf.compat.v1.set_random_seed(1)
-    actor_network = DummyActorNet(self._action_spec)
-    value_network = DummyValueNet()
+        # Sample from the policy 1000 times, and ensure that actions considered
+        # invalid according to the mask are never chosen.
+        action_step = policy.action(time_step)
+        action = self.evaluate(action_step.action)
+        self.assertEqual(action.shape, (batch_size, 1))
+        self.assertAllEqual(np_mask[action], np.ones([batch_size, 1]))
 
-    policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        self._action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
-    new_policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        self._action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
+    @parameterized.named_parameters(*_test_cases("test_action"))
+    def testValue(self, network_cls):
+        actor_network = network_cls(self._action_spec)
+        value_network = DummyValueNet()
 
-    action_step = policy.action(self._time_step)
-    new_action_step = new_policy.action(self._time_step)
+        policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            self._action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
 
-    self.assertEqual(action_step.action.shape, new_action_step.action.shape)
-    self.assertEqual(action_step.action.dtype, new_action_step.action.dtype)
+        batch_size = tf.compat.dimension_value(self._time_step.step_type.shape[0])
+        policy_state = policy.get_initial_state(batch_size=batch_size)
+        value_pred, unused_policy_state = policy.apply_value_network(
+            self._time_step.observation, self._time_step.step_type, policy_state
+        )
+        self.assertEqual(value_pred.shape.as_list(), [1, 1])
+        self.assertEqual(value_pred.dtype, tf.float32)
+        self.evaluate(tf.compat.v1.global_variables_initializer())
+        self.evaluate(value_pred)
 
-    self.evaluate(tf.compat.v1.global_variables_initializer())
-    self.evaluate(new_policy.update(policy))
-    actions_, new_actions_ = self.evaluate(
-        [action_step.action, new_action_step.action])
-    self.assertAllEqual(actions_, new_actions_)
+    def testUpdate(self):
+        tf.compat.v1.set_random_seed(1)
+        actor_network = DummyActorNet(self._action_spec)
+        value_network = DummyValueNet()
 
-  def testDeterministicDistribution(self):
-    actor_network = DummyActorNet(self._action_spec)
-    value_network = DummyValueNet()
+        policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            self._action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
+        new_policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            self._action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
 
-    policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        self._action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
+        action_step = policy.action(self._time_step)
+        new_action_step = new_policy.action(self._time_step)
 
-    action_step = policy.action(self._time_step)
-    distribution_step = policy.distribution(self._time_step)
-    self.assertIsInstance(distribution_step.action,
-                          tfp.distributions.Deterministic)
-    distribution_mean = distribution_step.action.mean()
-    self.evaluate(tf.compat.v1.global_variables_initializer())
-    actions_ = self.evaluate(action_step.action)
-    distribution_mean_ = self.evaluate(distribution_mean)
-    self.assertNear(actions_, distribution_mean_, 1e-6)
+        self.assertEqual(action_step.action.shape, new_action_step.action.shape)
+        self.assertEqual(action_step.action.dtype, new_action_step.action.dtype)
 
-  def testGaussianDistribution(self):
-    actor_network = DummyActorDistributionNet(self._action_spec)
-    value_network = DummyValueNet()
+        self.evaluate(tf.compat.v1.global_variables_initializer())
+        self.evaluate(new_policy.update(policy))
+        actions_, new_actions_ = self.evaluate(
+            [action_step.action, new_action_step.action]
+        )
+        self.assertAllEqual(actions_, new_actions_)
 
-    policy = ppo_policy.PPOPolicy(
-        self._time_step_spec,
-        self._action_spec,
-        actor_network=actor_network,
-        value_network=value_network)
+    def testDeterministicDistribution(self):
+        actor_network = DummyActorNet(self._action_spec)
+        value_network = DummyValueNet()
 
-    distribution_step = policy.distribution(self._time_step)
-    self.assertIsInstance(distribution_step.action, tfp.distributions.Normal)
+        policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            self._action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
+
+        action_step = policy.action(self._time_step)
+        distribution_step = policy.distribution(self._time_step)
+        self.assertIsInstance(distribution_step.action, tfp.distributions.Deterministic)
+        distribution_mean = distribution_step.action.mean()
+        self.evaluate(tf.compat.v1.global_variables_initializer())
+        actions_ = self.evaluate(action_step.action)
+        distribution_mean_ = self.evaluate(distribution_mean)
+        self.assertNear(actions_, distribution_mean_, 1e-6)
+
+    def testGaussianDistribution(self):
+        actor_network = DummyActorDistributionNet(self._action_spec)
+        value_network = DummyValueNet()
+
+        policy = ppo_policy.PPOPolicy(
+            self._time_step_spec,
+            self._action_spec,
+            actor_network=actor_network,
+            value_network=value_network,
+        )
+
+        distribution_step = policy.distribution(self._time_step)
+        self.assertIsInstance(distribution_step.action, tfp.distributions.Normal)
 
 
-if __name__ == '__main__':
-  tf.test.main()
+if __name__ == "__main__":
+    tf.test.main()
+
