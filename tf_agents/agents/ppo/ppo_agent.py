@@ -68,6 +68,7 @@ import gin
 from six.moves import range
 from six.moves import zip
 import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
+from IPython import embed
 
 from tf_agents.agents import tf_agent
 from tf_agents.agents.ppo import ppo_policy
@@ -282,9 +283,13 @@ class PPOAgent(tf_agent.TFAgent):
 
     self._observation_normalizer = None
     if normalize_observations:
+      observation = time_step_spec.observation
+      if self._observation_and_action_constraint_splitter:
+        observation, _ = self._observation_and_action_constraint_splitter(observation)
+
       self._observation_normalizer = (
           tensor_normalizer.StreamingTensorNormalizer(
-              time_step_spec.observation, scope='normalize_observations'))
+              observation, scope='normalize_observations'))
 
     policy = greedy_policy.GreedyPolicy(
         ppo_policy.PPOPolicy(
@@ -444,7 +449,6 @@ class PPOAgent(tf_agent.TFAgent):
                                            action_distribution_parameters,
                                            current_policy_distribution, weights,
                                            debug_summaries)
-
     total_loss = (
         policy_gradient_loss + value_estimation_loss + l2_regularization_loss +
         entropy_regularization_loss + kl_penalty_loss)
@@ -561,6 +565,9 @@ class PPOAgent(tf_agent.TFAgent):
             name=action_name, data=single_action, step=self.train_step_counter)
 
     action_distribution_parameters = policy_steps_.info
+    
+    # clip to [-1e10, 1e10], to avoid infs. These mess up KL divergence calculations
+    action_distribution_parameters = tf.nest.map_structure(lambda x : tf.clip_by_value(x, -1e10, 1e10), action_distribution_parameters)
 
     # Reconstruct per-timestep policy distribution from stored distribution
     #   parameters.
@@ -646,7 +653,6 @@ class PPOAgent(tf_agent.TFAgent):
 
         self._optimizer.apply_gradients(
             grads_and_vars, global_step=self.train_step_counter)
-
         policy_gradient_losses.append(loss_info.extra.policy_gradient_loss)
         value_estimation_losses.append(loss_info.extra.value_estimation_loss)
         l2_regularization_losses.append(loss_info.extra.l2_regularization_loss)
@@ -665,8 +671,11 @@ class PPOAgent(tf_agent.TFAgent):
     self.update_adaptive_kl_beta(kl_divergence)
 
     if self._observation_normalizer:
+      observation = time_steps.observation
+      if self._observation_and_action_constraint_splitter is not None:
+        observation,_ = self._observation_and_action_constraint_splitter(time_steps.observation)
       self._observation_normalizer.update(
-          time_steps.observation, outer_dims=[0, 1])
+          observation, outer_dims=[0, 1])
     else:
       # TODO(b/127661780): Verify performance of reward_normalizer when obs are
       #                    not normalized

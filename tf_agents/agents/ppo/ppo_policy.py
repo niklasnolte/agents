@@ -128,8 +128,6 @@ class PPOPolicy(actor_policy.ActorPolicy):
                           training=False):
     """Apply value network to time_step, potentially a sequence.
 
-    If observation_normalizer is not None, applies observation normalization.
-
     Args:
       observations: A (possibly nested) observation tensor with outer_dims
         either (batch_size,) or (batch_size, time_index). If observations is a
@@ -145,27 +143,29 @@ class PPOPolicy(actor_policy.ActorPolicy):
         - value_preds with same outer_dims as time_step
         - value_state at the end of the time series
     """
+    mask = None
+    if self._observation_and_action_constraint_splitter:
+      observations, mask = self._observation_and_action_constraint_splitter(observations)
     if self._observation_normalizer:
       observations = self._observation_normalizer.normalize(observations)
-    if self._observation_and_action_constraint_splitter:
-      observations, _ = self._observation_and_action_constraint_splitter(observations)
-      return self._value_network(observations, step_types, value_state,
-                                training=training) #FIXME mask?
     return self._value_network(observations, step_types, value_state,
-                               training=training)
+                               training=training, mask=mask)
 
   def _apply_actor_network(self, time_step, policy_state, training=False):
+    mask = None
     observation = time_step.observation
-    if self._observation_normalizer:
-      observation = self._observation_normalizer.normalize(observation)
     if self._observation_and_action_constraint_splitter:
       observation, mask = self._observation_and_action_constraint_splitter(observation)
+    if self._observation_normalizer:
+      observation = self._observation_normalizer.normalize(observation)
+    if mask is None:
+      return self._actor_network(
+          observation, time_step.step_type, network_state=policy_state,
+          training=training)
+    else:
       return self._actor_network(
           observation, time_step.step_type, network_state=policy_state,
           training=training, mask=mask)
-    return self._actor_network(
-        observation, time_step.step_type, network_state=policy_state,
-        training=training)
 
   def _variables(self):
     var_list = self._actor_network.variables[:]

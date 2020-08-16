@@ -139,7 +139,6 @@ class ActorDistributionNetwork(network.DistributionNetwork):
     def map_proj(spec):
       if tensor_spec.is_discrete(spec):
         return discrete_projection_net(spec)
-      else:
         return continuous_projection_net(spec)
 
     projection_networks = tf.nest.map_structure(map_proj, output_tensor_spec)

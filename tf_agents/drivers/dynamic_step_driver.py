@@ -127,6 +127,9 @@ class DynamicStepDriver(driver.Driver):
         loop_vars for next iteration of tf.while_loop.
       """
       action_step = self.policy.action(time_step, policy_state)
+      # print('WUUUUUUURST')
+      # print(time_step)
+      # print(action_step)
       policy_state = action_step.state
       next_time_step = self.env.step(action_step.action)
 

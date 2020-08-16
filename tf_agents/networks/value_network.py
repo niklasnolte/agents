@@ -120,7 +120,7 @@ class ValueNetwork(network.Network):
         kernel_initializer=tf.compat.v1.initializers.random_uniform(
             minval=-0.03, maxval=0.03))
 
-  def call(self, observation, step_type=None, network_state=(), training=False):
+  def call(self, observation, step_type=None, network_state=(), training=False, mask=None):
     state, network_state = self._encoder(
         observation, step_type=step_type, network_state=network_state,
         training=training)
