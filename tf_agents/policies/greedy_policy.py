@@ -73,10 +73,9 @@ class GreedyPolicy(tf_policy.Base):
                          "making it incompatible with a greedy policy.")
 
       return DeterministicWithLogProb(loc=greedy_action)
-    print('got here')
+
     distribution_step = self._wrapped_policy.distribution(
         time_step, policy_state)
-    print('didnt get here')
     return policy_step.PolicyStep(
         tf.nest.map_structure(dist_fn, distribution_step.action),
         distribution_step.state, distribution_step.info)

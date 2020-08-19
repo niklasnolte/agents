@@ -128,6 +128,8 @@ class PPOPolicy(actor_policy.ActorPolicy):
                           training=False):
     """Apply value network to time_step, potentially a sequence.
 
+    If observation_normalizer is not None, applies observation normalization.
+
     Args:
       observations: A (possibly nested) observation tensor with outer_dims
         either (batch_size,) or (batch_size, time_index). If observations is a

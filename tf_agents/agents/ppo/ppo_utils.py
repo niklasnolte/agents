@@ -23,7 +23,6 @@ import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 from tf_agents.trajectories import policy_step
 from tf_agents.trajectories import trajectory
 
-from IPython import embed
 
 def make_timestep_mask(batched_next_time_step, allow_partial_episodes=False):
   """Create a mask for transitions and optionally final incomplete episodes.
@@ -100,6 +99,7 @@ def nested_kl_divergence(nested_from_distribution, nested_to_distribution,
   for dim in outer_dims:
     reduce_dims.remove(dim)
   total_kl = tf.reduce_sum(input_tensor=summed_kl_divergences, axis=reduce_dims)
+
   return total_kl
 
 

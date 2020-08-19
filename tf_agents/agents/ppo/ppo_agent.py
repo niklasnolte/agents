@@ -68,7 +68,6 @@ import gin
 from six.moves import range
 from six.moves import zip
 import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
-from IPython import embed
 
 from tf_agents.agents import tf_agent
 from tf_agents.agents.ppo import ppo_policy
@@ -449,6 +448,7 @@ class PPOAgent(tf_agent.TFAgent):
                                            action_distribution_parameters,
                                            current_policy_distribution, weights,
                                            debug_summaries)
+
     total_loss = (
         policy_gradient_loss + value_estimation_loss + l2_regularization_loss +
         entropy_regularization_loss + kl_penalty_loss)
@@ -650,6 +650,7 @@ class PPOAgent(tf_agent.TFAgent):
 
         self._optimizer.apply_gradients(
             grads_and_vars, global_step=self.train_step_counter)
+
         policy_gradient_losses.append(loss_info.extra.policy_gradient_loss)
         value_estimation_losses.append(loss_info.extra.value_estimation_loss)
         l2_regularization_losses.append(loss_info.extra.l2_regularization_loss)
