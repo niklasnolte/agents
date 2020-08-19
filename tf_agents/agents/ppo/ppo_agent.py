@@ -565,9 +565,6 @@ class PPOAgent(tf_agent.TFAgent):
             name=action_name, data=single_action, step=self.train_step_counter)
 
     action_distribution_parameters = policy_steps_.info
-    
-    # clip to [-1e10, 1e10], to avoid infs. These mess up KL divergence calculations
-    action_distribution_parameters = tf.nest.map_structure(lambda x : tf.clip_by_value(x, -1e10, 1e10), action_distribution_parameters)
 
     # Reconstruct per-timestep policy distribution from stored distribution
     #   parameters.
@@ -1082,6 +1079,13 @@ class PPOAgent(tf_agent.TFAgent):
 
   def _kl_divergence(self, time_steps, action_distribution_parameters,
                      current_policy_distribution):
+    # clip to finite values, to avoid infs. These mess up KL divergence calculations
+    if self._observation_and_action_constraint_splitter:
+      def clip(t):
+        return tf.clip_by_value(t, tf.float32.min, tf.float32.max)
+      action_distribution_parameters = tf.nest.map_structure(clip, action_distribution_parameters)
+      current_policy_distribution = self._action_distribution_spec.build_distribution(logits=clip(current_policy_distribution.logits))
+
     outer_dims = list(
         range(nest_utils.get_outer_rank(time_steps, self.time_step_spec)))
 
